@@ -2,8 +2,8 @@ name: Range Bound Scanner
 
 on:
   schedule:
-    # Run at 4:00 AM UTC = 9:30 AM IST, weekdays only (Mon-Fri)
-    - cron: '0 4 * * 1-5'
+    # Run every hour from 9:30 AM IST (4:00 AM UTC) to 4:30 PM IST (11:00 AM UTC), weekdays only (Mon-Fri)
+    - cron: '0 4-11 * * 1-5'
   workflow_dispatch:  # Allow manual trigger from GitHub UI
 
 permissions:
