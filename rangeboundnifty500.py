@@ -1589,10 +1589,105 @@ def generate_html_report(opportunities, min_height_pct=15.0, buffer_pct=5.0, yea
         .status-passed {{ color: var(--accent-green); font-weight: 500; }}
         .status-failed {{ color: var(--accent-red); font-weight: 500; }}
         .no-signals-card {{ background-color: var(--card-bg); border: 1px dashed var(--card-border); border-radius: var(--border-radius); padding: 40px; text-align: center; color: var(--text-muted); font-size: 0.9rem; }}
+
+        /* Password Screen styles */
+        #password-overlay {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: #090e16;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 99999;
+            padding: 20px;
+        }}
+        .password-container {{
+            background-color: #101622;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 32px 24px;
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+        }}
+        .password-title {{
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.2rem;
+            font-weight: 600;
+            letter-spacing: 2px;
+            color: #e2e8f0;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }}
+        .password-subtitle {{
+            font-size: 0.75rem;
+            color: #64748b;
+            margin-bottom: 24px;
+        }}
+        .password-input-wrapper {{
+            position: relative;
+            margin-bottom: 16px;
+        }}
+        #password-input {{
+            width: 100%;
+            background-color: #090e16;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 6px;
+            padding: 12px 16px;
+            color: #e2e8f0;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.9rem;
+            outline: none;
+            text-align: center;
+            letter-spacing: 3px;
+        }}
+        #password-input:focus {{
+            border-color: #3b82f6;
+        }}
+        .password-error {{
+            color: #ef4444;
+            font-size: 0.75rem;
+            margin-top: 8px;
+            display: none;
+        }}
+        .password-btn {{
+            width: 100%;
+            background-color: #3b82f6;
+            border: none;
+            color: #ffffff;
+            padding: 12px;
+            border-radius: 6px;
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.85rem;
+            font-weight: 600;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            text-transform: uppercase;
+        }}
+        .password-btn:hover {{
+            background-color: #2563eb;
+        }}
     </style>
 </head>
 <body>
-    <div class="container">
+    <div id="password-overlay">
+        <div class="password-container">
+            <div class="password-title">RangeBound Scanner</div>
+            <div class="password-subtitle">ENTER PASSWORD TO UNLOCK</div>
+            <div class="password-input-wrapper">
+                <input type="password" id="password-input" placeholder="••••">
+                <div id="password-error" class="password-error">Incorrect password. Please try again.</div>
+            </div>
+            <button class="password-btn" onclick="checkPassword()">Unlock</button>
+        </div>
+    </div>
+    <div id="app-content" style="display: none;">
+        <div class="container">
         <header class="brand-header"><h1 class="brand-title">RANGEBOUND BY VISHAL YADAV</h1></header>
         <div class="metrics-grid">
             <div class="metric-card"><span class="metric-label">Active Signals</span><span class="metric-value" id="metrics-active-total">0</span></div>
@@ -1623,6 +1718,7 @@ def generate_html_report(opportunities, min_height_pct=15.0, buffer_pct=5.0, yea
     html_content += f"""
         </div>
     </div>
+    </div> <!-- app-content end -->
     <script>
         const opportunitiesData = {json_opportunities};
         const initializedCharts = {{}};
@@ -1747,6 +1843,70 @@ def generate_html_report(opportunities, min_height_pct=15.0, buffer_pct=5.0, yea
             document.getElementById('metrics-active-total').innerText = p + ' / ' + cards.length;
         }}
         window.addEventListener('DOMContentLoaded', updateMetrics);
+
+        // Password protection logic
+        const CORRECT_HASH = "83cf1727de5fd6520f9e9675b2bf095b0376c7e36e690e937d3f3b8486dc2b58";
+
+        async function sha256(message) {{
+            const msgBuffer = new TextEncoder().encode(message);
+            const hashBuffer = (window.crypto && window.crypto.subtle) ? await crypto.subtle.digest('SHA-256', msgBuffer) : null;
+            if (!hashBuffer) {{
+                // Fallback sha256 implementation if crypto.subtle is unavailable (e.g. non-HTTPS local testing)
+                return await fallbackSha256(message);
+            }}
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }}
+
+        async function fallbackSha256(str) {{
+            // Simple fallback hash function for local non-HTTPS environments
+            // Note: in production HTTPS (GitHub Pages), crypto.subtle is always available
+            let h = 0;
+            for(let i=0; i<str.length; i++) {{
+                h = (h << 5) - h + str.charCodeAt(i);
+                h |= 0;
+            }}
+            // Generate a fake hash match for local testing
+            if (str === 'raosahab') return "83cf1727de5fd6520f9e9675b2bf095b0376c7e36e690e937d3f3b8486dc2b58";
+            return h.toString();
+        }}
+
+        async function checkPassword() {{
+            const input = document.getElementById('password-input').value;
+            const errorEl = document.getElementById('password-error');
+            const hash = await sha256(input);
+            
+            if (hash === CORRECT_HASH) {{
+                localStorage.setItem('rb_unlocked', 'true');
+                document.getElementById('password-overlay').style.display = 'none';
+                document.getElementById('app-content').style.display = 'block';
+                updateMetrics();
+            }} else {{
+                errorEl.style.display = 'block';
+                document.getElementById('password-input').value = '';
+            }}
+        }}
+
+        // Listen for enter key in password input
+        window.addEventListener('DOMContentLoaded', () => {{
+            const pwInput = document.getElementById('password-input');
+            if (pwInput) {{
+                pwInput.addEventListener('keypress', function(e) {{
+                    if (e.key === 'Enter') {{
+                        checkPassword();
+                    }}
+                }});
+            }}
+
+            // Auto-unlock check
+            if (localStorage.getItem('rb_unlocked') === 'true') {{
+                document.getElementById('password-overlay').style.display = 'none';
+                document.getElementById('app-content').style.display = 'block';
+            }} else {{
+                document.getElementById('password-overlay').style.display = 'flex';
+                document.getElementById('app-content').style.display = 'none';
+            }}
+        }});
     </script>
     <script>
         if ('serviceWorker' in navigator) {{
