@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+nifty500_cache.json
+screener_report.html
+_site/

@@ -1,0 +1,60 @@
+name: Range Bound Scanner
+
+on:
+  schedule:
+    # Run at 4:00 AM UTC = 9:30 AM IST, weekdays only (Mon-Fri)
+    - cron: '0 4 * * 1-5'
+  workflow_dispatch:  # Allow manual trigger from GitHub UI
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  scan-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Range Bound Scanner
+        run: python rangeboundnifty500.py --years 2
+        env:
+          PYTHONUNBUFFERED: '1'
+
+      - name: Prepare deployment directory
+        run: |
+          mkdir -p _site/icons
+          cp screener_report.html _site/index.html
+          cp pwa/manifest.json _site/
+          cp pwa/sw.js _site/
+          cp pwa/icons/* _site/icons/
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
