@@ -388,7 +388,7 @@ def evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, lookback_months):
         (highs_s - closes_s.shift(1)).abs(),
         (lows_s - closes_s.shift(1)).abs()
     ], axis=1).max(axis=1)
-    atr_series = tr.rolling(window=14).mean().fillna(method='bfill')
+    atr_series = tr.rolling(window=14).mean().bfill()
     atrs = atr_series.tolist()
     
     if len(df_sub) < 30:
