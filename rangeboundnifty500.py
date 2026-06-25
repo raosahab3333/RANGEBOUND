@@ -1210,6 +1210,7 @@ def run_screener(min_height_pct=20.0, buffer_pct=4.0, years=2):
             "support": f"₹{opp['support']:.2f}",
             "resistance": f"₹{opp['resistance']:.2f}",
             "range_height": f"{opp['range_height']:.2f}%",
+            "raw_range_height": opp["range_height"],
             "touch_date": opp["s3_date"],
             "days_held": opp["days_held"],
             "buying_price": f"₹{opp['support']:.2f}",
@@ -1315,7 +1316,7 @@ def generate_html_report(opportunities, min_height_pct=15.0, buffer_pct=5.0, yea
         trade_score_badge = f'<span class="badge" style="color: var(--accent-cyan); background-color: rgba(14, 165, 233, 0.04); border: 1px solid rgba(14, 165, 233, 0.12);">TRADE SCORE: {trade_score_val}/10</span>'
         
         return f"""
-        <div class="stock-card {passed_class}" data-symbol="{opt['symbol']}" data-basesymbol="{opt['base_symbol']}" data-segment="{opt['segment']}" data-passed="{'true' if opt['passed_fundamentals'] else 'false'}">
+        <div class="stock-card {passed_class}" data-symbol="{opt['symbol']}" data-basesymbol="{opt['base_symbol']}" data-segment="{opt['segment']}" data-passed="{'true' if opt['passed_fundamentals'] else 'false'}" data-height="{opt['raw_range_height']}">
             <div class="card-summary" onclick="toggleCard('{idx}')">
                 <div class="summary-left">
                     <span class="symbol-name">{opt['symbol']}</span>
@@ -1508,7 +1509,7 @@ def generate_html_report(opportunities, min_height_pct=15.0, buffer_pct=5.0, yea
         #search-input {{ width: 100%; background-color: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--border-radius); padding: 10px 16px 10px 38px; color: var(--text-main); font-family: 'Inter', sans-serif; font-size: 0.85rem; outline: none; transition: border-color 0.2s; }}
         #search-input:focus {{ border-color: var(--text-muted); }}
 
-        .filter-wrapper {{ display: flex; gap: 6px; }}
+        .filter-wrapper {{ display: flex; gap: 6px; flex-wrap: wrap; }}
         .filter-btn {{ background-color: var(--card-bg); border: 1px solid var(--card-border); color: var(--text-muted); padding: 8px 14px; border-radius: var(--border-radius); font-family: 'Outfit', sans-serif; font-size: 0.8rem; font-weight: 500; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 6px; }}
         .filter-btn:hover {{ border-color: rgba(255, 255, 255, 0.1); color: var(--text-main); }}
         .filter-btn.active {{ background-color: rgba(255, 255, 255, 0.03); border-color: var(--text-muted); color: var(--text-main); }}
@@ -1684,6 +1685,8 @@ def generate_html_report(opportunities, min_height_pct=15.0, buffer_pct=5.0, yea
                 <button class="filter-btn active" data-filter="all" onclick="setFilter(this)">All <span class="lbl-count" id="count-all">0</span></button>
                 <button class="filter-btn" data-filter="passed" onclick="setFilter(this)">Passed <span class="lbl-count" id="count-passed">0</span></button>
                 <button class="filter-btn" data-filter="failed" onclick="setFilter(this)">Failed <span class="lbl-count" id="count-failed">0</span></button>
+                <button class="filter-btn" data-filter="upto20" onclick="setFilter(this)">&le; 20% Move <span class="lbl-count" id="count-upto20">0</span></button>
+                <button class="filter-btn" data-filter="above20" onclick="setFilter(this)">&gt; 20% Move <span class="lbl-count" id="count-above20">0</span></button>
             </div>
         </div>
         <div class="opportunities-list">
@@ -1808,18 +1811,37 @@ def generate_html_report(opportunities, min_height_pct=15.0, buffer_pct=5.0, yea
             document.querySelectorAll('.stock-card').forEach(card => {{
                 const match = (card.dataset.symbol.toLowerCase() + card.dataset.basesymbol.toLowerCase() + card.dataset.segment.toLowerCase()).includes(query);
                 const passed = card.dataset.passed === 'true';
-                const f = (currentFilter === 'all') || (currentFilter === 'passed' && passed) || (currentFilter === 'failed' && !passed);
+                const height = parseFloat(card.dataset.height);
+                let f = false;
+                if (currentFilter === 'all') {{
+                    f = true;
+                }} else if (currentFilter === 'passed') {{
+                    f = passed;
+                }} else if (currentFilter === 'failed') {{
+                    f = !passed;
+                }} else if (currentFilter === 'upto20') {{
+                    f = height <= 20.0;
+                }} else if (currentFilter === 'above20') {{
+                    f = height > 20.0;
+                }}
                 card.style.display = (match && f) ? 'block' : 'none';
             }});
         }}
 
         function updateMetrics() {{
             const cards = document.querySelectorAll('.stock-card');
-            let p = 0, f = 0;
-            cards.forEach(c => {{ if(c.dataset.passed === 'true') p++; else f++; }});
+            let p = 0, f = 0, u20 = 0, a20 = 0;
+            cards.forEach(c => {{ 
+                const passed = c.dataset.passed === 'true';
+                const height = parseFloat(c.dataset.height);
+                if (passed) p++; else f++;
+                if (height <= 20.0) u20++; else a20++;
+            }});
             document.getElementById('count-all').innerText = cards.length;
             document.getElementById('count-passed').innerText = p;
             document.getElementById('count-failed').innerText = f;
+            document.getElementById('count-upto20').innerText = u20;
+            document.getElementById('count-above20').innerText = a20;
             document.getElementById('metrics-active-total').innerText = p + ' / ' + cards.length;
             
             // Set local client refresh timestamp
