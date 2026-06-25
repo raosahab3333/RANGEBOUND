@@ -202,11 +202,19 @@ def find_levels(highs, lows, dates, n=30, cluster_pct=0.04):
     return cluster(troughs), cluster(peaks)
 
 
-def detect_swings(dates, highs, lows, closes, atrs, window=5, min_pct=0.03, atr_factor=1.5):
+def detect_swings(dates, highs, lows, closes, atrs, window=5):
+    # Calculate average daily ATR percentage
+    atr_pcts = [atr / close for atr, close in zip(atrs, closes) if close > 0]
+    avg_atr_pct = sum(atr_pcts) / len(atr_pcts) if atr_pcts else 0.02
+    
+    # Adaptive thresholds
+    min_pct = max(0.015, min(0.035, avg_atr_pct * 0.8))
+    atr_factor = max(1.0, min(1.5, avg_atr_pct * 50.0))
+    time_sep = 3
+    
     n = len(closes)
     raw_swings = []
     
-    # 1. Local Peak/Trough Detection
     for i in range(window, n - window):
         is_peak = True
         is_trough = True
@@ -224,7 +232,6 @@ def detect_swings(dates, highs, lows, closes, atrs, window=5, min_pct=0.03, atr_
             
     raw_swings = sorted(raw_swings, key=lambda x: x[0])
     
-    # 2. Filter Swings using Minimum Move Threshold & Time Separation
     swings = []
     for s in raw_swings:
         idx, side, price, date = s
@@ -238,17 +245,14 @@ def detect_swings(dates, highs, lows, closes, atrs, window=5, min_pct=0.03, atr_
         last_idx, last_side, last_price, last_date = swings[-1]
         
         if side == last_side:
-            # Same side: keep the more extreme one
             if side == 'H' and price > last_price:
                 swings[-1] = s
             elif side == 'L' and price < last_price:
                 swings[-1] = s
         else:
-            # Check move distance and time separation
-            if abs(price - last_price) >= min_move and (idx - last_idx) >= 5:
+            if abs(price - last_price) >= min_move and (idx - last_idx) >= time_sep:
                 swings.append(s)
                 
-    # 3. Final Pass to resolve any consecutive same-side swings
     final_swings = []
     for s in swings:
         if not final_swings:
@@ -266,35 +270,40 @@ def detect_swings(dates, highs, lows, closes, atrs, window=5, min_pct=0.03, atr_
     return final_swings
 
 
-def find_alternating_pivots(dates, highs, lows, S_low, S_high, R_low, R_high, swings):
-    # Filter swings that touch the support/resistance zones
+def find_alternating_pivots(dates, highs, lows, closes, S, R, atrs, swings):
     touches = []
     for s in swings:
         idx, side, price, date = s
-        is_s = lows[idx] <= S_high and highs[idx] >= S_low
-        is_r = highs[idx] >= R_low and lows[idx] <= R_high
+        local_atr = atrs[idx]
+        tol = max(2.0 * local_atr, 0.02 * price)
+        S_low, S_high = S - tol, S + tol
+        R_low, R_high = R - tol, R + tol
+        
+        is_s = lows[idx] <= S_high + 0.5 * local_atr and highs[idx] >= S_low - 0.5 * local_atr
+        is_r = highs[idx] >= R_low - 0.5 * local_atr and lows[idx] <= R_high + 0.5 * local_atr
         
         if side == 'L' and is_s:
             touches.append(('S', idx, date, price))
         elif side == 'H' and is_r:
             touches.append(('R', idx, date, price))
             
-    # Also check if the final bar of the lookback period touches support/resistance
     final_idx = len(dates) - 1
-    is_final_s = lows[final_idx] <= S_high and highs[final_idx] >= S_low
-    is_final_r = highs[final_idx] >= R_low and lows[final_idx] <= R_high
+    local_atr = atrs[final_idx]
+    tol = max(2.0 * local_atr, 0.02 * closes[final_idx])
+    S_low, S_high = S - tol, S + tol
+    R_low, R_high = R - tol, R + tol
     
-    # Avoid duplicate touches if the final bar is already in swings
+    is_final_s = lows[final_idx] <= S_high + 0.5 * local_atr and highs[final_idx] >= S_low - 0.5 * local_atr
+    is_final_r = highs[final_idx] >= R_low - 0.5 * local_atr and lows[final_idx] <= R_high + 0.5 * local_atr
+    
     if not any(t[1] == final_idx for t in touches):
         if is_final_s:
             touches.append(('S', final_idx, dates[final_idx], lows[final_idx]))
         elif is_final_r:
             touches.append(('R', final_idx, dates[final_idx], highs[final_idx]))
             
-    # Sort touches chronologically
     touches = sorted(touches, key=lambda x: x[1])
             
-    # Strictly alternate between S and R
     pivots = []
     current_search = 'S'
     curr_group = []
@@ -305,7 +314,6 @@ def find_alternating_pivots(dates, highs, lows, S_low, S_high, R_low, R_high, sw
             if side == 'S':
                 curr_group.append(t)
             elif side == 'R' and curr_group:
-                # Finalize support pivot (lowest low)
                 best = min(curr_group, key=lambda x: x[3])
                 pivots.append(best)
                 current_search = 'R'
@@ -314,13 +322,11 @@ def find_alternating_pivots(dates, highs, lows, S_low, S_high, R_low, R_high, sw
             if side == 'R':
                 curr_group.append(t)
             elif side == 'S' and curr_group:
-                # Finalize resistance pivot (highest high)
                 best = max(curr_group, key=lambda x: x[3])
                 pivots.append(best)
                 current_search = 'S'
                 curr_group = [t]
                 
-    # Finalize the last group
     if curr_group:
         if current_search == 'S':
             best = min(curr_group, key=lambda x: x[3])
@@ -329,14 +335,7 @@ def find_alternating_pivots(dates, highs, lows, S_low, S_high, R_low, R_high, sw
             best = max(curr_group, key=lambda x: x[3])
             pivots.append(best)
     
-    # ================================================================
-    # HARD RULE: Enforce 15% minimum move between consecutive pivots.
-    # With 1% tolerance buffer → accept moves >= 14%, reject < 14%.
-    # A new R is only valid if price rose >= 14% from the last S.
-    # A new S is only valid if price fell >= 14% from the last R.
-    # Rejected pivots are treated as market noise and ignored.
-    # ================================================================
-    MIN_MOVE_PCT = 0.14  # 15% required - 1% buffer
+    MIN_MOVE_PCT = 0.14
     
     validated = []
     for pivot in pivots:
@@ -347,26 +346,19 @@ def find_alternating_pivots(dates, highs, lows, S_low, S_high, R_low, R_high, sw
         last = validated[-1]
         
         if pivot[0] == last[0]:
-            # Same side (can happen after a rejection made two same-side
-            # pivots adjacent) — keep the more extreme one
             if pivot[0] == 'S' and pivot[3] < last[3]:
                 validated[-1] = pivot
             elif pivot[0] == 'R' and pivot[3] > last[3]:
                 validated[-1] = pivot
         else:
-            # Opposite side — enforce minimum 15% move
             if last[0] == 'S' and pivot[0] == 'R':
-                # S → R: price must rise at least 14% from S
                 move_pct = (pivot[3] - last[3]) / last[3]
                 if move_pct >= MIN_MOVE_PCT:
                     validated.append(pivot)
-                # else: skip this R — swing too small, treat as noise
             elif last[0] == 'R' and pivot[0] == 'S':
-                # R → S: price must fall at least 14% from R
                 move_pct = (last[3] - pivot[3]) / last[3]
                 if move_pct >= MIN_MOVE_PCT:
                     validated.append(pivot)
-                # else: skip this S — swing too small, treat as noise
             
     return validated
 
@@ -379,7 +371,6 @@ def evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, lookback_months):
     opens = df_sub['Open'].tolist()
     volumes = df_sub['Volume'].tolist()
     
-    # Calculate ATR
     highs_s = df_sub['High']
     lows_s = df_sub['Low']
     closes_s = df_sub['Close']
@@ -392,51 +383,40 @@ def evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, lookback_months):
     atrs = atr_series.tolist()
     
     if len(df_sub) < 30:
-        return None, 0, "Too few bars", {}
+        return []
         
-    # Step 1: Detect significant swing points
     swings = detect_swings(dates, highs, lows, closes, atrs)
     if len(swings) < 5:
-        return None, 0, "Insufficient significant swing points", {}
+        return []
         
     high_prices = [s[2] for s in swings if s[1] == 'H']
     low_prices = [s[2] for s in swings if s[1] == 'L']
     
     if len(high_prices) < 2 or len(low_prices) < 2:
-        return None, 0, "Insufficient peaks/troughs to cluster", {}
+        return []
         
-    # Step 2: Cluster swing points using 4% tolerance and get cluster bounds
+    avg_atr_pct = np.mean([atr / close for atr, close in zip(atrs, closes)])
+    cluster_pct = max(0.04, min(0.07, 1.5 * avg_atr_pct))
+    
     candidate_supports = []
     for p in low_prices:
-        cluster = [x for x in low_prices if abs(x - p)/p <= 0.04]
+        cluster = [x for x in low_prices if abs(x - p)/p <= cluster_pct]
         median_val = float(np.median(cluster))
         min_val = float(np.min(cluster))
         max_val = float(np.max(cluster))
-        if not any(abs(c["S"] - median_val)/median_val < 0.025 for c in candidate_supports):
-            candidate_supports.append({
-                "S": median_val,
-                "low": min_val,
-                "high": max_val
-            })
+        if not any(abs(c["S"] - median_val)/median_val < 0.015 for c in candidate_supports):
+            candidate_supports.append({"S": median_val, "low": min_val, "high": max_val})
             
     candidate_resistances = []
     for p in high_prices:
-        cluster = [x for x in high_prices if abs(x - p)/p <= 0.04]
+        cluster = [x for x in high_prices if abs(x - p)/p <= cluster_pct]
         median_val = float(np.median(cluster))
         min_val = float(np.min(cluster))
         max_val = float(np.max(cluster))
-        if not any(abs(c["R"] - median_val)/median_val < 0.025 for c in candidate_resistances):
-            candidate_resistances.append({
-                "R": median_val,
-                "low": min_val,
-                "high": max_val
-            })
+        if not any(abs(c["R"] - median_val)/median_val < 0.015 for c in candidate_resistances):
+            candidate_resistances.append({"R": median_val, "low": min_val, "high": max_val})
             
-    best_combo_opt = None
-    best_combo_score = -1
-    best_combo_reason = "No valid support/resistance combinations met all conditions"
-    best_combo_debug = {}
-    
+    valid_combos = []
     cmp = closes[-1]
     atr_last = atrs[-1] if atrs else 1.0
     tol = max(1.5 * atr_last, 0.02 * cmp)
@@ -452,51 +432,41 @@ def evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, lookback_months):
             if height < min_height_pct:
                 continue
                 
-            # Define zones based on cluster min/max with tolerance buffer
             S_low = s_cand["low"] - tol
             S_high = s_cand["high"] + tol
             R_low = r_cand["low"] - tol
             R_high = r_cand["high"] + tol
             
-            # Strictly alternating pivots using cluster zones
-            pivots = find_alternating_pivots(dates, highs, lows, S_low, S_high, R_low, R_high, swings)
+            pivots = find_alternating_pivots(dates, highs, lows, closes, S, R, atrs, swings)
             if not pivots:
                 continue
                 
             num_s = sum(1 for p in pivots if p[0] == 'S')
             num_r = sum(1 for p in pivots if p[0] == 'R')
             
-            # Check setup ends in Support
             if pivots[-1][0] != 'S':
                 continue
                 
             if num_s < 3 or num_r < 2:
                 continue
                 
-            # Closes inside check (only evaluate closes starting from the first touch to avoid trends before range)
             start_idx = pivots[0][1]
             closes_after_start = closes[start_idx:]
             closes_inside = sum(1 for c in closes_after_start if S_low <= c <= R_high) / len(closes_after_start)
             if closes_inside < 0.65:
                 continue
                 
-            # Invalidation Check
-            if cmp < S_low * 0.90 or cmp > R_high * 1.05:
+            if cmp < S_low * 0.65 or cmp > R_high * 1.05:
                 continue
                 
-            # Proximity
             low_prox = (cmp - S) / S * 100
             
-            # Score Components
-            # 1. Support Quality (deviation check, milder penalty for wicks)
             s_deviations = [abs(p[3] - S)/S for p in pivots if p[0] == 'S']
             s_quality = max(0.0, 10.0 - 60.0 * np.mean(s_deviations)) if s_deviations else 8.0
             
-            # 2. Resistance Quality
             r_deviations = [abs(p[3] - R)/R for p in pivots if p[0] == 'R']
             r_quality = max(0.0, 10.0 - 60.0 * np.mean(r_deviations)) if r_deviations else 8.0
             
-            # 3. Touch Strength
             total_touches = num_s + num_r
             if total_touches >= 7:
                 touch_strength = 10.0
@@ -505,7 +475,6 @@ def evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, lookback_months):
             else:
                 touch_strength = 8.0
             
-            # 4. Zone Consistency (closes inside the range bounds)
             if closes_inside >= 0.75:
                 zone_consistency = 10.0
             elif closes_inside >= 0.65:
@@ -515,7 +484,6 @@ def evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, lookback_months):
             else:
                 zone_consistency = 4.0
             
-            # 5. ATR Stability (range height vs ATR daily volatility)
             height_atr_ratio = height / (atr_last / S * 100) if atr_last > 0 else 5.0
             if height_atr_ratio >= 5.0:
                 atr_stability = 10.0
@@ -526,7 +494,6 @@ def evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, lookback_months):
             else:
                 atr_stability = 4.0
             
-            # 6. Time Symmetry (touches span percentage of lookback)
             p_indices = [p[1] for p in pivots]
             time_span = (p_indices[-1] - p_indices[0]) / len(closes)
             if time_span >= 0.60:
@@ -536,7 +503,6 @@ def evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, lookback_months):
             else:
                 time_symmetry = 6.0
             
-            # 7. False Breakout Recovery (base of 8, +1 if breakouts occurred)
             fb_score = 8.0
             outside_runs = 0
             is_outside = False
@@ -549,38 +515,42 @@ def evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, lookback_months):
                     is_outside = False
             if outside_runs > 0:
                 fb_score = 9.0
-            
-            # 8. Swing Symmetry (coefficient of variation of moves)
+                
             moves = [abs(pivots[i][3] - pivots[i-1][3])/pivots[i-1][3] for i in range(1, len(pivots))]
             if len(moves) > 1:
                 std_moves = np.std(moves)
                 swing_symmetry = max(0.0, 10.0 - 10.0 * std_moves)
             else:
                 swing_symmetry = 8.0
-            
-            # 9. Volatility Compression
+                
             recent_atr = np.mean(atrs[-10:])
             avg_atr = np.mean(atrs)
             comp_ratio = recent_atr / avg_atr if avg_atr > 0 else 1.0
             vol_score = min(10.0, max(0.0, (1.1 - comp_ratio) / 0.3 * 10.0))
             if vol_score < 5.0:
                 vol_score = 8.0
-            
-            # 10. Range Duration
+                
             if lookback_months >= 12:
                 duration_score = 10.0
             elif lookback_months >= 6:
                 duration_score = 8.0
             else:
                 duration_score = 6.0
-            
+                
             confidence_score = int(s_quality + r_quality + touch_strength + zone_consistency + atr_stability + time_symmetry + fb_score + swing_symmetry + vol_score + duration_score)
             confidence_score = min(100, max(0, confidence_score))
             
+            # Apply Proximity and Recency Bonuses
+            if S <= cmp <= S * 1.05:
+                confidence_score = min(100, confidence_score + 5)
+            
+            days_since_last_pivot = len(closes) - pivots[-1][1]
+            if pivots[-1][0] == 'S' and days_since_last_pivot <= 30:
+                confidence_score = min(100, confidence_score + 5)
+                
             if confidence_score < 70:
                 continue
                 
-            # Trade Score Heuristics
             prox_score = 0
             if cmp >= S and cmp <= S * 1.02:
                 prox_score = 3
@@ -605,11 +575,9 @@ def evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, lookback_months):
                 rr_score = -2
                 
             vol_boost = 1 if comp_ratio <= 0.90 else 0
-            # Note: fundamentals checked dynamically in run_screener
-            trade_score = int(6 + prox_score + rr_score + vol_boost) # starts at 6 base
+            trade_score = int(6 + prox_score + rr_score + vol_boost)
             trade_score = min(10, max(1, trade_score))
             
-            # Discretionary swing trader self-validation checks
             s_prices = [p[3] for p in pivots if p[0] == 'S']
             r_prices = [p[3] for p in pivots if p[0] == 'R']
             
@@ -625,30 +593,26 @@ def evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, lookback_months):
                 if r_drift > 15.0:
                     drift_ok = False
                     
-            days_since_last_pivot = len(closes) - pivots[-1][1]
-            fresh_ok = days_since_last_pivot <= 60
+            if lookback_months >= 36:
+                fresh_limit = 120
+            elif lookback_months >= 18:
+                fresh_limit = 90
+            else:
+                fresh_limit = 60
+            fresh_ok = days_since_last_pivot <= fresh_limit
             
-            # Construct debug info for this candidate
             ignored_list = []
             pivot_indices = [p[1] for p in pivots]
-            for s in swings:
-                idx, side, price, date = s
+            for s_pt in swings:
+                idx, side, price, date = s_pt
                 if idx not in pivot_indices:
-                    # Determine reason
                     is_s = lows[idx] <= S_high and highs[idx] >= S_low
                     is_r = highs[idx] >= R_low and lows[idx] <= R_high
                     if (side == 'L' and not is_s) or (side == 'H' and not is_r):
-                        reason = "Did not touch S/R zone"
+                        rsn = "Did not touch S/R zone"
                     else:
-                        reason = "Consecutive same-side touch (collapsed to extreme)"
-                    ignored_list.append((date, side, price, reason))
-                    
-            final_idx = len(dates) - 1
-            if final_idx not in pivot_indices and not any(s[0] == final_idx for s in swings):
-                is_final_s = lows[final_idx] <= S_high and highs[final_idx] >= S_low
-                is_final_r = highs[final_idx] >= R_low and lows[final_idx] <= R_high
-                if is_final_s or is_final_r:
-                    ignored_list.append((dates[final_idx], 'L' if is_final_s else 'H', lows[final_idx] if is_final_s else highs[final_idx], "Consecutive same-side touch (collapsed to extreme)"))
+                        rsn = "Consecutive same-side touch (collapsed to extreme)"
+                    ignored_list.append((date, side, price, rsn))
             
             temp_debug = {
                 "support_zone": f"{S_low:.2f} - {S_high:.2f}",
@@ -659,21 +623,16 @@ def evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, lookback_months):
                 "confidence_score": confidence_score,
                 "pivots": pivots,
                 "ignored_pivots": ignored_list,
-                "passed": False,
-                "passed_reason": "",
+                "passed": True,
+                "passed_reason": "Passed all structural and discretionary validation checks",
                 "rejected_reason": ""
             }
             
             if not (drift_ok and fresh_ok):
+                temp_debug["passed"] = False
                 temp_debug["rejected_reason"] = f"Discretionary checks failed (drift_ok={drift_ok} [s_drift={s_drift:.1f}%, r_drift={r_drift:.1f}%], fresh_ok={fresh_ok} [days={days_since_last_pivot}])"
-                if best_combo_score == -1:
-                    best_combo_debug = temp_debug
                 continue
                 
-            temp_debug["passed"] = True
-            temp_debug["passed_reason"] = "Passed all structural and discretionary validation checks"
-            
-            # Map back to original evaluate_range_for_df outputs
             alt_s_touches = [p for p in pivots if p[0] == 'S']
             alt_r_touches = [p for p in pivots if p[0] == 'R']
             touches_map = {}
@@ -729,26 +688,17 @@ def evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, lookback_months):
                 "lookback_months": lookback_months
             }
             
-            if confidence_score > best_combo_score:
-                best_combo_score = confidence_score
-                best_combo_opt = opt_info
-                best_combo_debug = temp_debug
-                best_combo_reason = None
-                
-    if best_combo_opt is not None:
-        return best_combo_opt, best_combo_score, None, best_combo_debug
-    else:
-        return None, 0, best_combo_reason, best_combo_debug
+            valid_combos.append((opt_info, confidence_score, temp_debug))
+            
+    return valid_combos
 
 
 def check_dynamic_range(df, min_height_pct, buffer_pct, symbol):
-    lookbacks = [3, 6, 9, 12, 18, 24]
-    best_opt = None
-    best_score = -1
-    best_lookback = None
-    best_debug_info = None
+    lookbacks = [6, 9, 12, 18, 24, 36, 48, 60]
+    all_valid = []
     rejections = []
     lookbacks_info = {}
+    best_debug_info = None
     
     for l_months in lookbacks:
         cutoff = df.index[-1] - pd.DateOffset(months=l_months)
@@ -759,56 +709,28 @@ def check_dynamic_range(df, min_height_pct, buffer_pct, symbol):
             lookbacks_info[l_months] = f"Rejected - {msg}"
             continue
             
-        opt, score, reason, debug_info = evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, l_months)
-        if best_debug_info is None or (debug_info and debug_info.get("confidence_score", 0) > best_debug_info.get("confidence_score", 0)):
-            best_debug_info = debug_info
+        combos = evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, l_months)
+        if not combos:
+            msg = "No valid range found"
+            rejections.append(f"{l_months}M: {msg}")
+            lookbacks_info[l_months] = f"Rejected - {msg}"
+            continue
             
-        if opt is not None:
-            lookbacks_info[l_months] = f"SUCCESS (Score: {score}, Trade Score: {opt['trade_score']}/10)"
-            if score > best_score:
-                best_score = score
-                best_opt = opt
-                best_lookback = l_months
-        else:
-            rejections.append(f"{l_months}M: {reason}")
-            lookbacks_info[l_months] = f"Rejected - {reason}"
-            
-    # Print detailed debug block
-    print(f"\n==================================================")
-    print(f"DEBUG LOG FOR {symbol}")
-    print(f"==================================================")
-    print("Lookback Windows Evaluated:")
-    for l_months, res in lookbacks_info.items():
-        print(f"  - {l_months}M: {res}")
+        all_valid.extend(combos)
+        for opt, score, debug in combos:
+            if best_debug_info is None or score > best_debug_info.get("confidence_score", 0):
+                best_debug_info = debug
+                
+        best_score_here = max(c[1] for c in combos)
+        lookbacks_info[l_months] = f"SUCCESS (Best Score: {best_score_here})"
         
-    if best_opt is not None:
-        # Re-evaluate winning lookback to get its debug info
-        cutoff = df.index[-1] - pd.DateOffset(months=best_lookback)
-        df_sub = df[df.index >= cutoff]
-        _, _, _, winning_debug = evaluate_range_for_df(df_sub, min_height_pct, buffer_pct, best_lookback)
-        
-        print(f"[RESULT] SUCCESS! (Lookback: {best_lookback}M)")
-        print(f"  Confidence Score: {best_opt.get('confidence_score')}")
-        print(f"  Trade Score: {best_opt.get('trade_score')}/10")
-        if winning_debug:
-            print(f"  Support Zone: {winning_debug.get('support_zone')} (S = {best_opt.get('support'):.2f})")
-            print(f"  Resistance Zone: {winning_debug.get('resistance_zone')} (R = {best_opt.get('resistance'):.2f})")
-            print(f"  ATR Tolerance: {winning_debug.get('atr_tolerance'):.2f}" if winning_debug.get('atr_tolerance') is not None else "  ATR Tolerance: N/A")
-            print(f"  Range Width: {winning_debug.get('range_width'):.2f}%" if winning_debug.get('range_width') is not None else f"  Range Width: {best_opt.get('range_height'):.2f}%")
-            pivots = winning_debug.get('pivots', [])
-            print(f"  Pivots ({len(pivots)} alternating):")
-            for p in pivots:
-                print(f"    - {p[0]}: {p[2]} at Price={p[3]:.2f}")
-            ignored = winning_debug.get('ignored_pivots', [])
-            if ignored:
-                print(f"  Ignored Pivots ({len(ignored)}):")
-                for date, side, price, rsn in ignored:
-                    print(f"    - {date} ({side}) at Price={price:.2f}: {rsn}")
-        else:
-            print(f"  Support: {best_opt.get('support'):.2f}")
-            print(f"  Resistance: {best_opt.get('resistance'):.2f}")
-            print(f"  Range Width: {best_opt.get('range_height'):.2f}%")
-    else:
+    if not all_valid:
+        print(f"\n==================================================")
+        print(f"DEBUG LOG FOR {symbol}")
+        print(f"==================================================")
+        print("Lookback Windows Evaluated:")
+        for l_months, res in lookbacks_info.items():
+            print(f"  - {l_months}M: {res}")
         print(f"[RESULT] REJECTED")
         if best_debug_info:
             print(f"  Best Candidate Evaluated:")
@@ -829,16 +751,73 @@ def check_dynamic_range(df, min_height_pct, buffer_pct, symbol):
                 print(f"    Ignored Pivots ({len(ignored)}):")
                 for date, side, price, rsn in ignored:
                     print(f"      - {date} ({side}) at Price={price:.2f}: {rsn}")
+        print(f"==================================================\n")
+        
+        reject_reason = best_debug_info.get('rejected_reason') if best_debug_info else "; ".join(rejections)
+        return None, 0, reject_reason
+        
+    voted_options = []
+    for opt, score, debug_info in all_valid:
+        S = opt["support"]
+        R = opt["resistance"]
+        l_month = opt["lookback_months"]
+        
+        matching_lookbacks = {l_month}
+        for other_opt, _, _ in all_valid:
+            other_S = other_opt["support"]
+            other_R = other_opt["resistance"]
+            other_l_month = other_opt["lookback_months"]
+            
+            s_match = abs(S - other_S)/S <= 0.03
+            r_match = abs(R - other_R)/R <= 0.03
+            if s_match and r_match:
+                matching_lookbacks.add(other_l_month)
+                
+        num_confirmations = len(matching_lookbacks)
+        voting_bonus = (num_confirmations - 1) * 8
+        voted_score = min(100, score + voting_bonus)
+        
+        import copy
+        voted_opt = copy.deepcopy(opt)
+        voted_opt["confidence_score"] = voted_score
+        voted_opt["voted_confirmations"] = num_confirmations
+        
+        v_debug = copy.deepcopy(debug_info)
+        v_debug["confidence_score"] = voted_score
+        v_debug["voting_bonus"] = voting_bonus
+        v_debug["confirmations_count"] = num_confirmations
+        
+        voted_options.append((voted_opt, voted_score, v_debug))
+        
+    voted_options.sort(key=lambda x: (x[1], x[0]["trade_score"], -x[0]["low_prox"]), reverse=True)
+    
+    best_opt, best_score, best_debug = voted_options[0]
+    
+    print(f"\n==================================================")
+    print(f"DEBUG LOG FOR {symbol}")
+    print(f"==================================================")
+    print("Lookback Windows Evaluated:")
+    for l_months, res in lookbacks_info.items():
+        print(f"  - {l_months}M: {res}")
+    print(f"[RESULT] SUCCESS! (Winning Lookback: {best_opt['lookback_months']}M)")
+    print(f"  Confidence Score: {best_score} (Base: {best_opt['confidence_score'] - (best_opt.get('voted_confirmations', 1) - 1) * 8}, Voting Bonus: {(best_opt.get('voted_confirmations', 1) - 1) * 8})")
+    print(f"  Trade Score: {best_opt['trade_score']}/10")
+    print(f"  Support Zone: {best_debug.get('support_zone')} (S = {best_opt['support']:.2f})")
+    print(f"  Resistance Zone: {best_debug.get('resistance_zone')} (R = {best_opt['resistance']:.2f})")
+    print(f"  ATR Tolerance: {best_debug.get('atr_tolerance'):.2f}" if best_debug.get('atr_tolerance') is not None else "  ATR Tolerance: N/A")
+    print(f"  Range Width: {best_debug.get('range_width'):.2f}%" if best_debug.get('range_width') is not None else f"  Range Width: {best_opt['range_height']:.2f}%")
+    pivots = best_debug.get('pivots', [])
+    print(f"  Pivots ({len(pivots)} alternating):")
+    for p in pivots:
+        print(f"    - {p[0]}: {p[2]} at Price={p[3]:.2f}")
+    ignored = best_debug.get('ignored_pivots', [])
+    if ignored:
+        print(f"  Ignored Pivots ({len(ignored)}):")
+        for date, side, price, rsn in ignored:
+            print(f"    - {date} ({side}) at Price={price:.2f}: {rsn}")
     print(f"==================================================\n")
     
-    if best_opt is not None:
-        return best_opt, best_score, None
-    else:
-        if best_debug_info:
-            reject_reason = best_debug_info.get('rejected_reason') or '; '.join(rejections)
-            return None, 0, reject_reason
-        else:
-            return None, 0, "; ".join(rejections)
+    return best_opt, best_score, None
 
 
 def format_days_held(days_diff):
@@ -1086,7 +1065,7 @@ def run_screener(min_height_pct=20.0, buffer_pct=4.0, years=2):
             "ICICIBANK", "ICICIGI", "ICICIPRULI", "IDFCFIRSTB", "IEX", "IGL", "INDHOTEL", "INDIACEM", "INDIAMART", 
             "INDIGO", "INDUSINDBK", "INDUSTOWER", "INFY", "IOC", "IPCALAB", "IRCTC", "IRFC", "ITC", "JINDALSTEL", 
             "JIOFIN", "JSWSTEEL", "JUBLFOOD", "KALYANKJIL", "KEI", "KIMS", "KOTAKBANK", "KPITTECH", "L&TFH", 
-            "LALPATHLAB", "LICHSGFIN", "LICI", "LT", "LTIM", "LTTS", "LUPIN", "M&M", "M&MFIN", "MANAPPURAM", 
+            "LALPATHLAB", "LICHSGFIN", "LICI", "LT", "LTM", "LTTS", "LUPIN", "M&M", "M&MFIN", "MANAPPURAM", 
             "MARICO", "MARUTI", "MAXHEALTH", "MAZDOCK", "MCX", "METROPOLIS", "MGL", "MOTILALOFS", "MPHASIS", 
             "MRF", "MUTHOOTFIN", "NATIONALUM", "NAVINFLUOR", "NESTLEIND", "NHPC", "NMDC", "NTPC", "OBEROIRLTY", 
             "OFSS", "ONGC", "PAGEIND", "PATANJALI", "PAYTM", "PEL", "PERSISTENT", "PETRONET", "PFC", "PIDILITIND", 
@@ -1109,9 +1088,9 @@ def run_screener(min_height_pct=20.0, buffer_pct=4.0, years=2):
     print(f"Scanning {len(tickers)} symbols on NSE India...")
     
     # 1. Batch download price data
-    print(f"Batch downloading daily price histories (last {years} years)...")
+    print("Batch downloading daily price histories (last 5 years)...")
     try:
-        price_data = yf.download(tickers, period=f"{years}y", group_by="ticker", progress=True)
+        price_data = yf.download(tickers, period="5y", group_by="ticker", progress=True)
     except Exception as e:
         print(f"Batch download failed: {e}")
         return
@@ -1163,7 +1142,7 @@ def run_screener(min_height_pct=20.0, buffer_pct=4.0, years=2):
     
     # Segment maps from standard lists
     known_segments = {
-        "UBL.NS": "V40NEXT", "EMAMILTD.NS": "V200", "LTIM.NS": "V200", "BSOFT.NS": "V200",
+        "UBL.NS": "V40NEXT", "EMAMILTD.NS": "V200", "LTM.NS": "V200", "BSOFT.NS": "V200",
         "VOLTAS.NS": "V40", "ZENSARTECH.NS": "V200", "INDIAMART.NS": "V200", "GODREJCP.NS": "V40NEXT",
         "HINDUNILVR.NS": "V40", "INFY.NS": "V40", "ABBOTINDIA.NS": "V40", "CRISIL.NS": "V200",
         "HCLTECH.NS": "V40", "PGHH.NS": "V40", "CASTROLIND.NS": "V200", "DOMS.NS": "V200",

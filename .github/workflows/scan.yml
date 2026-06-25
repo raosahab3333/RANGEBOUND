@@ -37,7 +37,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run Range Bound Scanner
-        run: python rangeboundnifty500.py --years 2
+        run: python rangeboundnifty500.py --years 5
         env:
           PYTHONUNBUFFERED: '1'
 
