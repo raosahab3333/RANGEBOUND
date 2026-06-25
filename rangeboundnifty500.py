@@ -1673,6 +1673,7 @@ def generate_html_report(opportunities, min_height_pct=15.0, buffer_pct=5.0, yea
             <div class="metric-card"><span class="metric-label">Min Range Height</span><span class="metric-value">{min_height_pct:.1f}%</span></div>
             <div class="metric-card"><span class="metric-label">Scan Period</span><span class="metric-value">{years} Years</span></div>
             <div class="metric-card"><span class="metric-label">Last Scanned</span><span class="metric-value" style="font-size: 0.9rem;">{scan_timestamp}</span></div>
+            <div class="metric-card"><span class="metric-label">App Refreshed</span><span class="metric-value" id="last-refreshed-time" style="font-size: 0.9rem;">--</span></div>
         </div>
         <div class="controls-panel">
             <div class="search-wrapper">
@@ -1820,6 +1821,13 @@ def generate_html_report(opportunities, min_height_pct=15.0, buffer_pct=5.0, yea
             document.getElementById('count-passed').innerText = p;
             document.getElementById('count-failed').innerText = f;
             document.getElementById('metrics-active-total').innerText = p + ' / ' + cards.length;
+            
+            // Set local client refresh timestamp
+            const now = new Date();
+            const dateStr = now.toLocaleDateString([], {{day: '2-digit', month: 'short', year: 'numeric'}});
+            const timeStr = now.toLocaleTimeString([], {{hour: '2-digit', minute: '2-digit'}});
+            const el = document.getElementById('last-refreshed-time');
+            if (el) el.innerText = dateStr + ", " + timeStr;
         }}
         window.addEventListener('DOMContentLoaded', updateMetrics);
 
